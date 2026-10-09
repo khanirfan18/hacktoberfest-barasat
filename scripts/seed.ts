@@ -108,15 +108,147 @@ async function seedUsers(supabase: SupabaseClient): Promise<number> {
   return created;
 }
 
+const DESCRIPTIONS = [
+  "Premier fitness center offering heavy lifting platforms, dumbbells up to 50kg, and dedicated cardio zones.",
+  "Community-driven strength gym equipped with Olympic barbells, power racks, functional turf, and private shower facilities.",
+  "Modern athletic facility featuring calibrated weight plates, cable crossover stations, and dedicated recovery spaces.",
+];
+
+const DEFAULT_OPENING_HOURS = Object.fromEntries(
+  ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((d) => [d, [["06:00", "22:00"]]])
+);
+
+const REALISTIC_PRICES = [15000, 22000, 30000, 18000, 25000, 35000, 20000, 28000, 40000];
+
+async function seedClaims(supabase: SupabaseClient): Promise<{ count: number; claimedGyms: Array<{ id: string; name: string; slug: string; city: string; priceMinor: number }> }> {
+  // Find owner user
+  const { data: listed } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+  const ownerUser = listed?.users.find((u) => u.email?.toLowerCase() === "owner@gymgo.demo");
+  if (!ownerUser) {
+    console.warn("owner@gymgo.demo not found, skipping gym claims.");
+    return { count: 0, claimedGyms: [] };
+  }
+
+  // Fetch available equipment types
+  const { data: eqTypes, error: eqError } = await supabase.from("equipment_types").select("id, key, name");
+  assertNoError("fetch equipment types for claims", eqError);
+  if (!eqTypes || eqTypes.length === 0) {
+    return { count: 0, claimedGyms: [] };
+  }
+
+  // Fetch all cities
+  const { data: citiesList, error: citiesError } = await supabase.from("cities").select("id, name, slug");
+  assertNoError("fetch cities for claims", citiesError);
+
+  const claimedGyms: Array<{ id: string; name: string; slug: string; city: string; priceMinor: number }> = [];
+
+  let globalClaimIdx = 0;
+  for (const city of citiesList || []) {
+    // Select up to 3 gyms in this city (deterministic order)
+    const { data: cityGyms, error: gymsError } = await supabase
+      .from("gyms")
+      .select("id, name, slug, status, owner_id")
+      .eq("city_id", city.id)
+      .order("created_at", { ascending: true })
+      .limit(3);
+
+    assertNoError(`fetch gyms for city ${city.name}`, gymsError);
+
+    const claimedIdsInCity: string[] = [];
+
+    for (const gym of cityGyms || []) {
+      claimedIdsInCity.push(gym.id);
+      const description = DESCRIPTIONS[globalClaimIdx % DESCRIPTIONS.length];
+      const priceMinor = REALISTIC_PRICES[globalClaimIdx % REALISTIC_PRICES.length];
+      globalClaimIdx++;
+
+      // Claim gym for owner@gymgo.demo with realistic price and opening hours
+      const { error: updateError } = await supabase
+        .from("gyms")
+        .update({
+          owner_id: ownerUser.id,
+          status: "claimed",
+          capacity_per_hour: 8,
+          description,
+          price_minor: priceMinor,
+          price_currency: "INR",
+          price_source: "owner",
+          opening_hours: DEFAULT_OPENING_HOURS,
+          hours_estimated: false,
+        })
+        .eq("id", gym.id);
+
+      assertNoError(`claim gym ${gym.name}`, updateError);
+
+      // Seed 4-6 equipment rows for this gym
+      const numEquipment = 4 + (globalClaimIdx % 3); // 4, 5, or 6
+      const startOffset = (globalClaimIdx * 5) % eqTypes.length;
+      const selectedEquipment: Array<{ id: string; key: string; name: string }> = [];
+      for (let i = 0; i < numEquipment; i++) {
+        selectedEquipment.push(eqTypes[(startOffset + i) % eqTypes.length]);
+      }
+
+      const eqRows = selectedEquipment.map((eq) => ({
+        gym_id: gym.id,
+        equipment_type_id: eq.id,
+        quantity: 2,
+        source: "seed" as const,
+        confirmed: true,
+      }));
+
+      const { error: insertEqError } = await supabase
+        .from("gym_equipment")
+        .upsert(eqRows, { onConflict: "gym_id,equipment_type_id" });
+
+      assertNoError(`seed equipment for gym ${gym.name}`, insertEqError);
+
+      claimedGyms.push({
+        id: gym.id,
+        name: gym.name,
+        slug: gym.slug,
+        city: city.name,
+        priceMinor,
+      });
+    }
+
+    // Unclaim any stray claimed gyms in this city to keep exactly 3 per city
+    if (claimedIdsInCity.length > 0) {
+      await supabase
+        .from("gyms")
+        .update({
+          owner_id: null,
+          status: "unclaimed",
+          price_source: "none",
+          price_minor: null,
+          price_currency: null,
+        })
+        .eq("city_id", city.id)
+        .not("id", "in", `(${claimedIdsInCity.join(",")})`)
+        .eq("status", "claimed");
+    }
+  }
+
+  return { count: claimedGyms.length, claimedGyms };
+}
+
 async function main(): Promise<void> {
   const supabase = adminClient();
   const cityCount = await seedCities(supabase);
   const equipmentCount = await seedEquipment(supabase);
   const userCount = await seedUsers(supabase);
-  console.log(`Seed complete: cities=${cityCount}, equipment_types=${equipmentCount}, users=${userCount}.`);
+  const { count: claimsCount, claimedGyms } = await seedClaims(supabase);
+  console.log(`Seed complete: cities=${cityCount}, equipment_types=${equipmentCount}, users=${userCount}, claimed_gyms=${claimsCount}.`);
+
+  if (claimedGyms.length > 0) {
+    console.log("\nGyms to give real photos:");
+    for (const g of claimedGyms) {
+      console.log(`- [${g.city}] ${g.name} (slug: ${g.slug}, id: ${g.id})`);
+    }
+  }
 }
 
 main().catch((error: unknown) => {
   console.error(`Seed failed: ${error instanceof Error ? error.message : "unknown error"}`);
   process.exitCode = 1;
 });
+
