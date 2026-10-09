@@ -55,8 +55,10 @@ export default function ExploreMap({
       className="h-full min-h-[420px] w-full bg-[#101418]"
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        attribution="&copy; OpenStreetMap contributors"
+        className="map-tiles"
+        maxZoom={19}
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <FitResults gyms={gyms} />
       {locatedGyms.map((gym) => (
