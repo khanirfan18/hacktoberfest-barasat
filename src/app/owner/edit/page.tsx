@@ -1,0 +1,4 @@
+import { requireRole } from "@/lib/auth";
+import { GlassCard, SectionTitle } from "@/components/ui-gg";
+export const dynamic = "force-dynamic";
+export default async function EditOwnerPage() { await requireRole("owner"); return <div className="mx-auto max-w-2xl py-8"><SectionTitle eyebrow="Manage listing" title="Make it unmistakably yours." /><GlassCard className="p-6"><label className="block text-sm text-white/60">Gym name<input className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 p-3" defaultValue="Iron Temple" /></label><label className="mt-4 block text-sm text-white/60">About<textarea className="mt-2 min-h-32 w-full rounded-xl border border-white/10 bg-white/5 p-3" defaultValue="Built for serious sessions, welcoming to everyone." /></label><button className="mt-5 rounded-full bg-lime px-5 py-3 font-semibold text-noir">Save changes</button></GlassCard></div>; }

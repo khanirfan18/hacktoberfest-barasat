@@ -1,3 +1,6 @@
 .next
 node_modules
 .env.local
+.env*
+stage0_results.json
+.cache

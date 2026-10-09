@@ -1,0 +1,5 @@
+import { GlassCard, NeonButton, Pill, PriceTag, RatingStars, SectionTitle } from "@/components/ui-gg";
+export default async function GymPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  return <div className="py-8"><Pill tone="cyan">BARASAT · OPEN NOW</Pill><h1 className="mt-5 font-display text-4xl">{slug.replaceAll("-", " ")}</h1><p className="mt-3 text-white/50">Built for serious sessions, welcoming to everyone.</p><div className="mt-8 grid gap-4 md:grid-cols-[1fr_320px]"><GlassCard className="min-h-72 p-6"><SectionTitle eyebrow="Inside" title="The good stuff" /><div className="flex flex-wrap gap-2">{["Free weights", "Squat racks", "Cable machines", "Showers", "Air conditioning"].map((item) => <Pill key={item}>{item}</Pill>)}</div></GlassCard><GlassCard className="p-6"><p className="text-xs text-white/50">DAY PASS · 1 HOUR</p><div className="mt-3"><PriceTag amount={15000} source="Scraped" /></div><div className="mt-3"><RatingStars rating={4} /> <span className="text-sm text-white/50">4.8 (32)</span></div><NeonButton className="mt-8 w-full">Book a session</NeonButton></GlassCard></div></div>;
+}
