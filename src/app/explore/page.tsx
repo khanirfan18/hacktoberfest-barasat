@@ -1,5 +1,65 @@
-import Link from "next/link";
-import { GlassCard, HeatStrip, Pill, PriceTag, RatingStars, SectionTitle } from "@/components/ui-gg";
-export default function ExplorePage() {
-  return <div className="py-8"><SectionTitle eyebrow="Explore" title="Find your training ground." /><div className="mb-8 flex gap-3"><input placeholder="Search a city..." className="flex-1 rounded-xl border border-white/10 bg-white/5 p-3 outline-none" /><Pill>2 cities live</Pill></div><div className="grid gap-4 md:grid-cols-2"><Link href="/gym/iron-temple"><GlassCard className="p-5 transition hover:border-lime/40"><div className="flex items-start justify-between"><div><Pill tone="cyan">Barasat</Pill><h2 className="mt-4 font-display text-xl">Iron Temple</h2><p className="mt-2 text-sm text-white/50">Strength · 24/7 · 1.2 km away</p></div><PriceTag amount={15000} source="Scraped" /></div><div className="mt-8"><div className="flex justify-between text-xs text-white/50"><RatingStars rating={4} /><span>Open now</span></div><HeatStrip values={[.2,.4,.6,.8,.7,.5,.3,.6,.9,.8,.4,.2]} /></div></GlassCard></Link><GlassCard className="flex min-h-64 items-center justify-center p-8 text-center"><p className="text-white/40">More gyms landing soon.<br /><span className="text-lime">Know a great spot?</span></p></GlassCard></div></div>;
+import { ExploreClient } from "@/components/explore/ExploreClient";
+import { getExploreCities, getExploreGyms } from "@/lib/queries/gyms";
+import { redirect } from "next/navigation";
+
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function paramValue(params: Record<string, string | string[] | undefined>, key: string): string {
+  const value = params[key];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function finiteNumber(value: string): number | null {
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export default async function ExplorePage({ searchParams }: { searchParams: SearchParams }) {
+  const params = await searchParams;
+  const cities = await getExploreCities();
+  const requestedSlug = paramValue(params, "city");
+  if (!requestedSlug && cities.length > 0) {
+    redirect(`/explore?city=${encodeURIComponent(cities.find((item) => item.slug === "barasat")?.slug ?? cities[0].slug)}`);
+  }
+  const city = requestedSlug
+    ? cities.find((item) => item.slug === requestedSlug) ?? null
+    : cities.find((item) => item.slug === "barasat") ?? cities[0] ?? null;
+  const query = paramValue(params, "q").trim().slice(0, 100);
+  const equipment = paramValue(params, "eq").split(",").filter(Boolean).slice(0, 8);
+  const allGyms = city ? await getExploreGyms(city, new Date(), equipment) : [];
+  const max = finiteNumber(paramValue(params, "max"));
+  const min = finiteNumber(paramValue(params, "min"));
+  const openOnly = paramValue(params, "open") === "1";
+  const sortParam = paramValue(params, "sort");
+  const sort = sortParam === "price" || sortParam === "near" ? sortParam : "rating";
+  const lat = finiteNumber(paramValue(params, "lat"));
+  const lng = finiteNumber(paramValue(params, "lng"));
+  const gyms = allGyms.filter((gym) =>
+    (!query || `${gym.name} ${gym.address ?? ""}`.toLowerCase().includes(query.toLowerCase()))
+    && (max === null || (gym.priceMinor !== null && gym.priceMinor <= max * 100))
+    && (min === null || gym.rating >= min)
+    && (!openOnly || gym.isOpenNow),
+  );
+  if (sort === "price") gyms.sort((a, b) => (a.priceMinor ?? Infinity) - (b.priceMinor ?? Infinity));
+  else if (sort === "near" && lat !== null && lng !== null) {
+    const distance = (gym: (typeof gyms)[number]) => gym.lat === null || gym.lng === null
+      ? Infinity
+      : Math.hypot(gym.lat - lat, gym.lng - lng);
+    gyms.sort((a, b) => distance(a) - distance(b));
+  } else gyms.sort((a, b) => b.rating - a.rating);
+
+  return (
+    <ExploreClient
+      city={city}
+      cities={cities}
+      gyms={gyms}
+      selectedEquipment={equipment.join(",")}
+      maxPrice={max === null ? "" : String(max)}
+      minRating={min === null ? "" : String(min)}
+      openOnly={openOnly}
+      query={query}
+      sort={sort}
+    />
+  );
 }
