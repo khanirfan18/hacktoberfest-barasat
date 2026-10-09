@@ -5,6 +5,7 @@ import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { type z } from "zod";
 import { adminClient } from "../supabase/admin";
+import { captureError } from "../monitoring";
 
 export interface CallGemmaOptions<T> {
   system?: string;
@@ -138,7 +139,13 @@ export async function callGemma<T>({
 
   // Put system instruction at top of user prompt
   const initialPrompt = system ? `${system}\n\n${user}` : user;
-  const rawResponse = await executeGenerateContent(model, initialPrompt);
+  let rawResponse: string;
+  try {
+    rawResponse = await executeGenerateContent(model, initialPrompt);
+  } catch (error) {
+    captureError("gemma", error);
+    throw error;
+  }
 
   let parsed: unknown;
   let parseError: string = "";
@@ -172,7 +179,8 @@ export async function callGemma<T>({
   let repairedResponse: string;
   try {
     repairedResponse = await executeGenerateContent(model, validationErrorMsg);
-  } catch {
+  } catch (error) {
+    captureError("gemma", error);
     throw new Error(`Gemma response failed schema validation: ${validationErrorMsg}`);
   }
 

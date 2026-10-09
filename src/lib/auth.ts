@@ -5,9 +5,16 @@ export type Role = "user" | "owner" | "super_admin";
 
 export async function requireRole(role: Role) {
   const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError) throw new Error(`Check authorization session: ${userError.message}`);
   if (!user) redirect("/login");
-  const userRole = (user.user_metadata?.role as Role | undefined) ?? "user";
-  if (userRole !== role && !(role === "user" && userRole !== "super_admin")) redirect("/");
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (profileError) throw new Error(`Load authorization role: ${profileError.message}`);
+  const userRole = profile?.role;
+  if (userRole !== role && !(role === "user" && userRole === "owner")) redirect("/");
   return user;
 }

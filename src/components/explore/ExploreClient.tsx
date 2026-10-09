@@ -10,6 +10,8 @@ import { CitySearch } from "@/components/explore/CitySearch";
 import { PriceTag } from "@/components/ui-gg/PriceTag";
 import type { ExploreCity, ExploreGym } from "@/lib/queries/gyms";
 import { formatMoney } from "@/lib/format";
+import { copy } from "@/lib/copy";
+import { z } from "zod";
 
 const GymMap = dynamic(() => import("./ExploreMap"), {
   ssr: false,
@@ -21,6 +23,11 @@ const EQUIPMENT_FILTERS = [
   ["treadmill", "Treadmill"], ["bench_press", "Bench"], ["cable_machine", "Cable"],
   ["power_rack", "Power rack"], ["kettlebells", "Kettlebells"],
 ];
+const locationResolutionSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("covered"), citySlug: z.string().min(1) }),
+  z.object({ status: z.literal("outside_coverage") }),
+]);
+const ingestResultSchema = z.object({ citySlug: z.string().min(1), gymsAdded: z.number().int().nonnegative() });
 
 function updateParam(
   router: ReturnType<typeof useRouter>,
@@ -140,6 +147,9 @@ export function ExploreClient({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileMap, setMobileMap] = useState(false);
   const [geolocationError, setGeolocationError] = useState("");
+  const [outsideCoverage, setOutsideCoverage] = useState<{ lat: number; lng: number } | null>(null);
+  const [resolvingLocation, setResolvingLocation] = useState(false);
+  const [loadingCityGyms, setLoadingCityGyms] = useState(false);
   const queryTimer = useRef<number | null>(null);
   const selectedKeys = selectedEquipment.split(",").filter(Boolean);
   useEffect(() => () => {
@@ -175,21 +185,65 @@ export function ExploreClient({
 
   function useLocation() {
     setGeolocationError("");
+    setOutsideCoverage(null);
     if (!navigator.geolocation) {
-      setGeolocationError("Location is not available in this browser.");
+      setGeolocationError(copy.liveCity.locationUnavailable);
       return;
     }
+    setResolvingLocation(true);
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("sort", "near");
-        params.set("lat", coords.latitude.toFixed(3));
-        params.set("lng", coords.longitude.toFixed(3));
-        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      async ({ coords }) => {
+        const location = { lat: Number(coords.latitude.toFixed(2)), lng: Number(coords.longitude.toFixed(2)) };
+        try {
+          const response = await fetch("/api/geo/resolve", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(location),
+          });
+          if (!response.ok) throw new Error("resolve");
+          const parsed = locationResolutionSchema.safeParse(await response.json());
+          if (!parsed.success) throw new Error("resolve");
+          if (parsed.data.status === "covered") {
+            router.push(`/explore?city=${encodeURIComponent(parsed.data.citySlug)}`);
+          } else {
+            setOutsideCoverage(location);
+          }
+        } catch {
+          setGeolocationError(copy.liveCity.resolveFailed);
+        } finally {
+          setResolvingLocation(false);
+        }
       },
-      () => setGeolocationError("Location permission was not granted."),
+      () => {
+        setResolvingLocation(false);
+        setGeolocationError(copy.liveCity.locationPermission);
+      },
       { maximumAge: 60_000, timeout: 8_000 },
     );
+  }
+
+  async function loadGymsHere() {
+    if (!outsideCoverage || loadingCityGyms) return;
+    setLoadingCityGyms(true);
+    setGeolocationError("");
+    try {
+      const response = await fetch("/api/geo/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(outsideCoverage),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok) {
+        if (response.status === 429) throw new Error(copy.liveCity.rateLimited);
+        throw new Error(copy.liveCity.ingestFailed);
+      }
+      const parsed = ingestResultSchema.safeParse(payload);
+      if (!parsed.success) throw new Error(copy.liveCity.ingestFailed);
+      router.push(`/explore?city=${encodeURIComponent(parsed.data.citySlug)}`);
+    } catch (error) {
+      setGeolocationError(error instanceof Error && error.message !== "Failed to fetch" ? error.message : copy.liveCity.ingestFailed);
+      setLoadingCityGyms(false);
+    }
   }
 
   const map = city ? <GymMap
@@ -264,10 +318,22 @@ export function ExploreClient({
                 <option value="rating">Top rated</option><option value="price">Price</option>
               </select>
             </label>
-            <button type="button" onClick={useLocation} className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan/25 px-3 py-2 text-xs text-cyan hover:bg-cyan/10">
-              <LocateFixed size={14} /> Near me
+            <button type="button" onClick={useLocation} disabled={resolvingLocation || loadingCityGyms} className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan/25 px-3 py-2 text-xs text-cyan hover:bg-cyan/10 disabled:opacity-50">
+              <LocateFixed size={14} /> {resolvingLocation ? copy.liveCity.loadingGyms : "Near me"}
             </button>
             {geolocationError && <p role="status" className="text-xs text-magenta sm:col-span-2">{geolocationError}</p>}
+            {outsideCoverage && !loadingCityGyms && (
+              <div className="rounded-xl border border-cyan/20 bg-cyan/[0.04] p-3 sm:col-span-2">
+                <p className="mb-3 text-xs text-white/60">{copy.liveCity.outsideCoverage}</p>
+                <button type="button" onClick={() => void loadGymsHere()} className="rounded-full border border-lime/30 bg-lime/[0.08] px-4 py-2 text-xs font-semibold text-lime">{copy.liveCity.loadGyms}</button>
+              </div>
+            )}
+            {loadingCityGyms && (
+              <div aria-busy="true" aria-label={copy.liveCity.loadingGyms} className="space-y-2 rounded-xl border border-white/10 bg-white/[0.025] p-3 sm:col-span-2">
+                <p className="text-xs text-white/55">{copy.liveCity.loadingDescription}</p>
+                {[0, 1, 2].map((item) => <div key={item} className="h-10 animate-pulse rounded-lg bg-white/[0.06]" />)}
+              </div>
+            )}
           </div>
           <section aria-label="Gym results" className="min-w-0">
             <div className="mb-3 flex items-center justify-between text-xs text-white/45">

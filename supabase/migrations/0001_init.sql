@@ -472,8 +472,13 @@ begin
     raise exception 'PRICE_NOT_AVAILABLE' using errcode = 'P0004';
   end if;
 
-  -- 4. on the hour
-  if date_trunc('hour', p_start) <> p_start then
+  -- 4. on the gym's local hour
+  select timezone into v_tz from public.cities where id = v_gym.city_id;
+  if v_tz is null then
+    v_tz := 'UTC';
+  end if;
+  v_local_start := p_start at time zone v_tz;
+  if date_trunc('hour', v_local_start) <> v_local_start then
     raise exception 'NOT_ON_THE_HOUR' using errcode = 'P0005';
   end if;
 
@@ -488,12 +493,6 @@ begin
   end if;
 
   -- 7. inside opening hours in city timezone
-  select timezone into v_tz from public.cities where id = v_gym.city_id;
-  if v_tz is null then
-    v_tz := 'UTC';
-  end if;
-
-  v_local_start := p_start at time zone v_tz;
   v_local_end := (p_start + interval '1 hour') at time zone v_tz;
 
   v_day_key := case extract(isodow from v_local_start)

@@ -1,9 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { CheckCircle2, LoaderCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase/browser";
 import { HeatStrip } from "@/components/ui-gg/HeatStrip";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { bookGymSlot } from "@/app/gym/actions";
+import { copy } from "@/lib/copy";
+import { formatMoney } from "@/lib/format";
 import { z } from "zod";
 
 const slotSchema = z.object({
@@ -43,10 +48,42 @@ function hourLabel(hour: number) {
     .format(new Date(Date.UTC(2026, 0, 1, hour)));
 }
 
+function zonedDateParts(value: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return {
+    date: `${part("year")}-${part("month")}-${part("day")}`,
+    hour: Number(part("hour")),
+    minute: Number(part("minute")),
+  };
+}
+
+function slotStartIso(date: string, hour: number, timezone: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  const desired = Date.UTC(year, month - 1, day, hour);
+  let utc = desired;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const local = zonedDateParts(new Date(utc), timezone);
+    const [localYear, localMonth, localDay] = local.date.split("-").map(Number);
+    utc += desired - Date.UTC(localYear, localMonth - 1, localDay, local.hour, local.minute);
+  }
+  return new Date(utc).toISOString();
+}
+
 export function BookingPanel({
   gymId,
   gymName,
   timezone,
+  priceMinor,
+  currency,
   claimed,
   claimHref,
   signedIn,
@@ -54,19 +91,41 @@ export function BookingPanel({
   gymId: string;
   gymName: string;
   timezone: string;
+  priceMinor: number | null;
+  currency: string;
   claimed: boolean;
   claimHref: string;
   signedIn: boolean;
 }) {
   const today = useMemo(() => localDate(new Date(), timezone), [timezone]);
   const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(today, index)), [today]);
+  const router = useRouter();
+  const pathname = usePathname();
   const [selectedDate, setSelectedDate] = useState(dates[0]);
   const [slots, setSlots] = useState<Slot[]>([]);
-  const [selectedHour, setSelectedHour] = useState<number | null>(null);
+  const [selectedStart, setSelectedStart] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [checkoutPending, setCheckoutPending] = useState(false);
+  const [checkoutPhase, setCheckoutPhase] = useState<"idle" | "processing" | "complete">("idle");
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const requestedStart = new URLSearchParams(window.location.search).get("slotStart");
+      if (!requestedStart) return;
+      const parsed = new Date(requestedStart);
+      if (Number.isNaN(parsed.getTime())) return;
+      const local = zonedDateParts(parsed, timezone);
+      if (!dates.includes(local.date)) return;
+      setSelectedDate(local.date);
+      setSelectedStart(parsed.toISOString());
+      setConfirmOpen(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [dates, timezone]);
+
   const chooseDate = (date: string) => {
     if (date === selectedDate) return;
     setLoading(true);
@@ -129,10 +188,49 @@ export function BookingPanel({
     .formatToParts(new Date()).find((part) => part.type === "hour")?.value;
   const currentHour = selectedDate === today ? Number(nowInZone ?? "0") : -1;
   const selectHour = (hour: number) => {
-    setSelectedHour(hour);
+    const start = slotStartIso(selectedDate, hour, timezone);
+    if (!signedIn) {
+      const destination = `${pathname}?slotStart=${encodeURIComponent(start)}`;
+      router.push(`/login?next=${encodeURIComponent(destination)}`);
+      return;
+    }
+    setError("");
+    setCheckoutPhase("idle");
+    setSelectedStart(start);
     setMobileOpen(false);
     setConfirmOpen(true);
   };
+  const confirmBooking = async () => {
+    if (!selectedStart || checkoutPending) return;
+    setCheckoutPending(true);
+    setError("");
+    setCheckoutPhase("processing");
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    setCheckoutPhase("complete");
+    try {
+      const result = await bookGymSlot({ gymId, slotStart: selectedStart, returnTo: pathname });
+      if (!result.success) {
+        setCheckoutPending(false);
+        setCheckoutPhase("idle");
+        setError(result.message);
+        if (result.loginUrl) router.push(result.loginUrl);
+        return;
+      }
+      router.push(`/ticket/${result.bookingId}`);
+    } catch {
+      setCheckoutPending(false);
+      setCheckoutPhase("idle");
+      setError(copy.bookingTicket.bookingFailed);
+    }
+  };
+  const selectedStartDate = selectedStart ? new Date(selectedStart) : null;
+  const selectedEndDate = selectedStartDate ? new Date(selectedStartDate.getTime() + 60 * 60 * 1000) : null;
+  const selectedLocalDate = selectedStartDate
+    ? new Intl.DateTimeFormat("en", { dateStyle: "full", timeZone: timezone }).format(selectedStartDate)
+    : "";
+  const selectedLocalRange = selectedStartDate && selectedEndDate
+    ? `${new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(selectedStartDate)}–${new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(selectedEndDate)}`
+    : "";
   const controls = (
     <BookingControls
       dates={dates}
@@ -144,6 +242,7 @@ export function BookingPanel({
       loading={loading}
       error={error}
       heatValues={heatValues}
+      disabled={checkoutPending}
       onSelectHour={selectHour}
     />
   );
@@ -171,11 +270,26 @@ export function BookingPanel({
       <Sheet open={confirmOpen} onOpenChange={setConfirmOpen}>
         <SheetContent side="bottom" className="rounded-t-[24px] border-white/10 bg-[#101418] p-5 text-white sm:mx-auto sm:max-w-lg">
           <SheetHeader className="p-0">
-            <SheetTitle className="font-display text-base text-white">Confirm your session</SheetTitle>
-            <SheetDescription className="text-white/55">{gymName} · {selectedDate} · {selectedHour === null ? "" : hourLabel(selectedHour)} · 1 hour</SheetDescription>
+            <SheetTitle className="font-display text-base text-white">{copy.bookingTicket.confirmTitle}</SheetTitle>
+            <SheetDescription className="text-white/55">{gymName}</SheetDescription>
           </SheetHeader>
-          <p className="text-sm text-white/55">Booking confirmation will be available in the next release.</p>
-          <button type="button" disabled className="rounded-full bg-lime px-5 py-3 text-sm font-semibold text-noir opacity-50">Booking coming soon</button>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-white/40">{copy.bookingTicket.dateLabel}</p>
+            <p className="mt-2 text-sm font-medium">{selectedLocalDate}</p>
+            <p className="mt-1 font-mono text-sm text-cyan">{selectedLocalRange} · {timezone}</p>
+            <div className="mt-4 flex items-end justify-between border-t border-white/10 pt-3">
+              <span className="text-xs text-white/50">{copy.bookingTicket.payAtGym}</span>
+              <span className="font-display text-xl text-lime">{formatMoney(priceMinor, currency)}</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-magenta/25 bg-magenta/[0.06] p-3">
+            <p className="font-mono text-[10px] font-bold tracking-[.18em] text-magenta">{copy.bookingTicket.demoCheckout}</p>
+            <p className="mt-1 text-xs text-white/65">{copy.bookingTicket.payAtGym} · No payment is collected online.</p>
+          </div>
+          {error && <p role="alert" className="text-sm text-magenta">{error}</p>}
+          <button type="button" onClick={() => void confirmBooking()} disabled={checkoutPending || !selectedStart || priceMinor === null} className="flex w-full items-center justify-center gap-2 rounded-full bg-lime px-5 py-3 text-sm font-semibold text-noir disabled:cursor-not-allowed disabled:opacity-50">
+            {checkoutPhase === "processing" ? <><LoaderCircle size={16} className="animate-spin" />{copy.bookingTicket.processing}</> : checkoutPhase === "complete" ? <><CheckCircle2 size={16} />{copy.bookingTicket.sessionBooked}</> : copy.bookingTicket.confirmBooking}
+          </button>
         </SheetContent>
       </Sheet>
 
@@ -194,6 +308,7 @@ function BookingControls({
   loading,
   error,
   heatValues,
+  disabled,
   onSelectHour,
 }: {
   dates: string[];
@@ -205,13 +320,14 @@ function BookingControls({
   loading: boolean;
   error: string;
   heatValues: number[];
+  disabled: boolean;
   onSelectHour: (hour: number) => void;
 }) {
   return (
     <>
       <div className="mt-4 flex gap-2 overflow-x-auto pb-2">
         {dates.map((date, index) => (
-          <button key={date} type="button" onClick={() => setSelectedDate(date)} aria-pressed={selectedDate === date} className={`min-w-16 rounded-xl border px-3 py-2 text-center ${selectedDate === date ? "border-lime/45 bg-lime/10 text-lime" : "border-white/10 text-white/50"}`}>
+          <button key={date} type="button" disabled={disabled} onClick={() => setSelectedDate(date)} aria-pressed={selectedDate === date} className={`min-w-16 rounded-xl border px-3 py-2 text-center disabled:opacity-50 ${selectedDate === date ? "border-lime/45 bg-lime/10 text-lime" : "border-white/10 text-white/50"}`}>
             <span className="block text-xs">{localDayLabel(date, timezone, index)}</span><span className="mt-1 block font-mono text-[10px]">{date.slice(5)}</span>
           </button>
         ))}
@@ -222,10 +338,10 @@ function BookingControls({
         {loading ? Array.from({ length: 8 }, (_, index) => <div key={index} className="h-10 animate-pulse rounded-lg bg-white/[0.06]" />)
           : normalized.map((slot) => {
             const full = slot.booked >= slot.capacity;
-            const disabled = !slot.open || full || slot.hour <= currentHour;
+            const unavailable = !slot.open || full || slot.hour <= currentHour;
             return (
-              <button key={slot.hour} type="button" disabled={disabled} onClick={() => onSelectHour(slot.hour)} title={full ? "This hour is full" : !slot.open ? "Gym is closed" : undefined}
-                className={`rounded-lg border px-2 py-2 text-[11px] transition ${disabled ? "cursor-not-allowed border-white/[0.05] text-white/25" : "border-lime/15 text-white/70 hover:border-lime/50 hover:bg-lime/10 hover:text-lime"}`}>
+              <button key={slot.hour} type="button" disabled={disabled || unavailable} onClick={() => onSelectHour(slot.hour)} title={full ? "This hour is full" : !slot.open ? "Gym is closed" : undefined}
+                className={`rounded-lg border px-2 py-2 text-[11px] transition ${disabled || unavailable ? "cursor-not-allowed border-white/[0.05] text-white/25" : "border-lime/15 text-white/70 hover:border-lime/50 hover:bg-lime/10 hover:text-lime"}`}>
                 {hourLabel(slot.hour)}{full && <span className="sr-only"> — full</span>}
               </button>
             );

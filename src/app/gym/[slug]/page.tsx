@@ -163,7 +163,7 @@ export default async function GymPage({ params }: { params: RouteParams }) {
               : gym.priceMinor === null || gym.priceSource === "none" ? null
                 : <p className="mt-3 text-xs text-white/45">Estimated price</p>}
           </GlassCard>
-          <BookingPanel gymId={gym.id} gymName={gym.name} timezone={gym.cityTimezone} claimed={gym.status === "claimed"} claimHref={`/claim/${gym.id}`} signedIn={Boolean(user)} />
+          <BookingPanel gymId={gym.id} gymName={gym.name} timezone={gym.cityTimezone} priceMinor={gym.priceMinor} currency={gym.priceCurrency ?? gym.cityCurrency} claimed={gym.status === "claimed"} claimHref={`/claim/${gym.id}`} signedIn={Boolean(user)} />
         </div>
       </div>
     </div>

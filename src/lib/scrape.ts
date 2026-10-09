@@ -3,6 +3,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import * as cheerio from "cheerio";
 import { adminClient } from "./supabase/admin";
+import { captureError } from "./monitoring";
 
 export interface SafeFetchOptions {
   allowHttp?: boolean;
@@ -381,6 +382,7 @@ export async function getPricingText(website: string, gymId?: string): Promise<s
       homeHtml = res.text;
     }
   } catch (err: any) {
+    captureError("scraper", err, gymId ? { gym_id: gymId } : {});
     await logScrapeAttempt(gymId ?? null, website, false, null, err?.name || "FETCH_FAILED");
   }
 
@@ -445,6 +447,7 @@ export async function getPricingText(website: string, gymId?: string): Promise<s
         htmls.push(res.text);
       }
     } catch (err: any) {
+      captureError("scraper", err, gymId ? { gym_id: gymId } : {});
       await logScrapeAttempt(gymId ?? null, pageUrl, false, null, err?.name || "FETCH_FAILED");
     }
   }
