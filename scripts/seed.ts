@@ -1,3 +1,4 @@
+import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 type CitySeed = {
@@ -42,6 +43,9 @@ const equipmentTypes = [
 
 const demoUsers = [
   { email: "traveller@gymgo.demo", role: "user", display_name: "Traveller" },
+  { email: "traveller2@gymgo.demo", role: "user", display_name: "Demo Traveller 2" },
+  { email: "traveller3@gymgo.demo", role: "user", display_name: "Demo Traveller 3" },
+  { email: "traveller4@gymgo.demo", role: "user", display_name: "Demo Traveller 4" },
   { email: "owner@gymgo.demo", role: "owner", display_name: "Gym Owner" },
   { email: "admin@gymgo.demo", role: "super_admin", display_name: "Admin" },
 ] as const;
@@ -231,13 +235,56 @@ async function seedClaims(supabase: SupabaseClient): Promise<{ count: number; cl
   return { count: claimedGyms.length, claimedGyms };
 }
 
+async function seedDemoReviews(
+  supabase: SupabaseClient,
+  claimedGyms: Array<{ id: string }>,
+): Promise<number> {
+  const gym = claimedGyms[0];
+  if (!gym) return 0;
+
+  const { data: existing, error: existingError } = await supabase
+    .from("reviews")
+    .select("id")
+    .eq("gym_id", gym.id)
+    .limit(1);
+  assertNoError("check demo gym reviews", existingError);
+  if (!existing) throw new Error("Check demo gym reviews: no data returned");
+  if (existing.length > 0) return 0;
+
+  const { data: listed, error: listError } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+  assertNoError("list demo travellers", listError);
+  const emails = ["traveller@gymgo.demo", "traveller2@gymgo.demo", "traveller3@gymgo.demo", "traveller4@gymgo.demo"];
+  const reviewerIds: string[] = [];
+  for (const email of emails) {
+    const reviewer = listed.users.find((candidate) => candidate.email?.toLowerCase() === email);
+    if (!reviewer) throw new Error("Seed demo reviews: one or more demo traveller accounts are missing");
+    reviewerIds.push(reviewer.id);
+  }
+  const reviewContent = [
+    { rating: 5, body: "Friendly staff, clean equipment, and plenty of room for a focused workout." },
+    { rating: 4, body: "Good strength setup and helpful team. Mornings are a comfortable time to train." },
+    { rating: 5, body: "Well-maintained machines and a welcoming atmosphere. I would come back." },
+    { rating: 4, body: "Solid equipment selection and a convenient location. The space felt organized." },
+  ];
+  const rows = reviewerIds.map((userId, index) => ({
+    gym_id: gym.id,
+    user_id: userId,
+    ...reviewContent[index],
+    verified: false,
+  }));
+  const { error } = await supabase.from("reviews").insert(rows);
+  assertNoError("insert demo reviews", error);
+  return rows.length;
+}
+
 async function main(): Promise<void> {
   const supabase = adminClient();
   const cityCount = await seedCities(supabase);
   const equipmentCount = await seedEquipment(supabase);
   const userCount = await seedUsers(supabase);
   const { count: claimsCount, claimedGyms } = await seedClaims(supabase);
-  console.log(`Seed complete: cities=${cityCount}, equipment_types=${equipmentCount}, users=${userCount}, claimed_gyms=${claimsCount}.`);
+  const demoReviewCount = await seedDemoReviews(supabase, claimedGyms);
+  console.log(`Seed complete: cities=${cityCount}, equipment_types=${equipmentCount}, users=${userCount}, claimed_gyms=${claimsCount}, demo_reviews=${demoReviewCount}.`);
 
   if (claimedGyms.length > 0) {
     console.log("\nGyms to give real photos:");
@@ -251,4 +298,3 @@ main().catch((error: unknown) => {
   console.error(`Seed failed: ${error instanceof Error ? error.message : "unknown error"}`);
   process.exitCode = 1;
 });
-
