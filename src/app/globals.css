@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "leaflet/dist/leaflet.css";
 
 @theme inline {
   --color-background: var(--background);
@@ -42,3 +43,27 @@ body::before {
 }
 a { color: inherit; text-decoration: none; }
 ::selection { background: #c6ff3d; color: #07090b; }
+
+.price-marker {
+  display: grid;
+  min-width: 54px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background: #f5f7f2;
+  color: #07090b;
+  font: 700 11px var(--font-jetbrains), monospace;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.marker-bookable { border-color: #c6ff3d; background: #c6ff3d; }
+.marker-hot { border-color: #ff3dcb; background: #ff3dcb; animation: marker-pulse 1.6s ease-in-out infinite; }
+.marker-selected { transform: scale(1.12); box-shadow: 0 0 0 4px rgba(198, 255, 61, 0.2), 0 4px 16px rgba(0, 0, 0, 0.45); }
+@keyframes marker-pulse {
+  50% { box-shadow: 0 0 0 7px rgba(255, 61, 203, 0.17), 0 4px 16px rgba(0, 0, 0, 0.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marker-hot { animation: none; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}
